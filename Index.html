@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Live Tracking System</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css" />
+  <style>
+    body { 
+      margin: 0; 
+      padding: 0; 
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+    #map { 
+      height: 90vh; 
+    }
+    #distanceBox {
+      background: linear-gradient(90deg, #3498db, #2c3e50);
+      color: white;
+      font-size: 22px;
+      padding: 12px;
+      text-align: center;
+      font-weight: bold;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 1000;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+      transition: background 0.3s ease;
+    }
+    #distanceBox.updating {
+      background: linear-gradient(90deg, #e74c3c, #c0392b);
+    }
+    .controls {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .control-btn {
+      background: #3498db;
+      color: white;
+      border: none;
+      border-radius: 50%;
+      width: 50px;
+      height: 50px;
+      font-size: 20px;
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+      transition: all 0.3s ease;
+    }
+    .control-btn:hover {
+      background: #2980b9;
+      transform: scale(1.1);
+    }
+    .user-info {
+      position: fixed;
+      bottom: 20px;
+      left: 20px;
+      background: white;
+      padding: 10px 15px;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+      z-index: 1000;
+      font-size: 14px;
+    }
+    .pulse {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #2ecc71;
+      margin-right: 5px;
+      box-shadow: 0 0 0 rgba(46, 204, 113, 0.4);
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0% {
+        box-shadow: 0 0 0 0 rgba(46, 204, 113, 0.7);
+      }
+      70% {
+        box-shadow: 0 0 0 10px rgba(46, 204, 113, 0);
+      }
+      100% {
+        box-shadow: 0 0 0 0 rgba(46, 204, 113, 0);
+      }
+    }
+    /* Improved user icon styles */
+    .direction-arrow {
+      width: 18px;
+      height: 18px;
+      background-color: #d81b60; /* Dark pink color */
+      border: 2px solid white;
+      border-radius: 50%;
+      position: relative;
+      box-shadow: 0 0 8px rgba(0,0,0,0.5);
+      transform-origin: center;
+      transition: transform 0.5s ease;
+    }
+    .direction-arrow::after {
+      content: '';
+      position: absolute;
+      top: -6px;
+      left: 50%;
+      margin-left: -4px;
+      width: 0;
+      height: 0;
+      border-left: 4px solid transparent;
+      border-right: 4px solid transparent;
+      border-bottom: 6px solid #d81b60;
+    }
+    /* Proximity point styles */
+    .proximity-point {
+      width: 16px;
+      height: 16px;
+      background-color: #3498db;
+      border: 2px solid white;
+      border-radius: 50%;
+      box-shadow: 0 0 8px rgba(0,0,0,0.5);
+    }
+    .proximity-point.active {
+      background-color: #2ecc71;
+      animation: point-pulse 1.5s infinite;
+    }
+    @keyframes point-pulse {
+      0% {
+        box-shadow: 0 0 0 0 rgba(46, 204, 113, 0.7);
+      }
+      70% {
+        box-shadow: 0 0 0 8px rgba(46, 204, 113, 0);
+      }
+      100% {
+        box-shadow: 0 0 0 0 rgba(46, 204, 113, 0);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="distanceBox">📏 Distance: Calculating...</div>
+  <div id="map"></div>
+  
+  <div class="controls">
+    <button class="control-btn" onclick="centerMap()">📍</button>
+    <button class="control-btn" onclick="toggleTracking()">⏯️</button>
+  </div>
+  
+  <div class="user-info">
+    <span class="pulse"></span>
+    <span id="locationStatus">Tracking active</span>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.js"></script>
+  <script src="https://unpkg.com/leaflet-rotate@0.2.8/dist/leaflet-rotate.js"></script>
+
+  <script>
+    // Destination (User fixed point)
+    var destLat = 23.129981;
+    var destLng = 77.487187;
+
+    // Map setup with rotation enabled
+    var map = L.map('map', {
+      zoomControl: true,
+      dragging: true,
+      rotate: true,
+      touchRotate: true,
+      rotateControl: {
+        closeOnZeroBearing: false
+      }
+    }).setView([destLat, destLng], 15);
+
+    // Use original OpenStreetMap tiles for clear details
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap',
+      maxZoom: 19
+    }).addTo(map);
+
+    // Marker for destination with custom icon
+    var destIcon = L.divIcon({
+      html: '<div style="background-color: #e74c3c; width: 24px; height: 24px; border-radius: 50%; border: 3px solid white; box-shadow: 0 0 10px rgba(0,0,0,0.5);"></div>',
+      className: 'destination-marker',
+      iconSize: [24, 24],
+      iconAnchor: [12, 12]
+    });
+    
+    var destMarker = L.marker([destLat, destLng], {icon: destIcon})
+      .addTo(map)
+      .bindPopup("🎯 Destination");
+
+    // Variables to store polylines and user marker
+    var traveledPath = null;
+    var remainingPath = null;
+    var userMarker = null;
+    var routeCoordinates = null;
+    var isTracking = true;
+    var watchId = null;
+    var routeControl = null;
+    var previousPosition = null;
+    var currentBearing = 0;
+
+    // Define proximity points (A, B, C)
+    var proximityPoints = [
+      {name: 'A', lat: 23.121926, lng: 77.497903, marker: null, active: false},
+      {name: 'B', lat: 23.122873, lng: 77.498338, marker: null, active: false},
+      {name: 'C', lat: 23.121143, lng: 77.496841, marker: null, active: false}
+    ];
+
+    // Create proximity point markers
+    function createProximityPoints() {
+      proximityPoints.forEach(function(point) {
+        point.marker = L.marker([point.lat, point.lng], {
+          icon: L.divIcon({
+            html: `<div class="proximity-point" id="point-${point.name}"></div>`,
+            className: 'proximity-marker',
+            iconSize: [16, 16],
+            iconAnchor: [8, 8]
+          })
+        }).addTo(map).bindPopup(`📍 Point ${point.name}`);
+      });
+    }
+
+    // Check proximity to points
+    function checkProximity(userLat, userLng) {
+      proximityPoints.forEach(function(point) {
+        // Calculate distance between user and point
+        var distance = map.distance([userLat, userLng], [point.lat, point.lng]);
+        
+        if (distance <= 50) { // Within 50 meters
+          if (!point.active) {
+            // Activate point
+            point.active = true;
+            document.getElementById(`point-${point.name}`).classList.add('active');
+            point.marker.setPopupContent(`📍 Point ${point.name} <span style="color:#2ecc71">(Active)</span>`);
+          }
+        } else {
+          if (point.active) {
+            // Deactivate point
+            point.active = false;
+            document.getElementById(`point-${point.name}`).classList.remove('active');
+            point.marker.setPopupContent(`📍 Point ${point.name}`);
+          }
+        }
+      });
+    }
+
+    // Custom user marker with directional arrow
+    function createUserMarker(lat, lng, bearing) {
+      return L.marker([lat, lng], {
+        icon: L.divIcon({
+          html: `<div class="direction-arrow" style="transform: rotate(${bearing}deg);"></div>`,
+          className: 'user-marker',
+          iconSize: [18, 18],
+          iconAnchor: [9, 9]
+        })
+      });
+    }
+
+    // Calculate bearing between two points
+    function calculateBearing(startLat, startLng, endLat, endLng) {
+      startLat = toRadians(startLat);
+      startLng = toRadians(startLng);
+      endLat = toRadians(endLat);
+      endLng = toRadians(endLng);
+
+      var y = Math.sin(endLng - startLng) * Math.cos(endLat);
+      var x = Math.cos(startLat) * Math.sin(endLat) -
+              Math.sin(startLat) * Math.cos(endLat) * Math.cos(endLng - startLng);
+      var bearing = Math.atan2(y, x);
+      bearing = toDegrees(bearing);
+      bearing = (bearing + 360) % 360;
+      
+      return bearing;
+    }
+
+    function toRadians(degrees) {
+      return degrees * Math.PI / 180;
+    }
+
+    function toDegrees(radians) {
+      return radians * 180 / Math.PI;
+    }
+
+    // Function to update route and polylines
+    function updateRoute(userLat, userLng) {
+      document.getElementById('distanceBox').classList.add('updating');
+      
+      // Use the low-level routing API instead of the control to avoid popups
+      var router = L.Routing.osrmv1({
+        serviceUrl: 'https://router.project-osrm.org/route/v1',
+        profile: 'driving',
+        useHints: false
+      });
+      
+      router.route([
+        L.Routing.waypoint(L.latLng(userLat, userLng)),
+        L.Routing.waypoint(L.latLng(destLat, destLng))
+      ], function(err, routes) {
+        if (err) {
+          console.error("Routing error:", err);
+          document.getElementById('distanceBox').classList.remove('updating');
+          return;
+        }
+
+        if (routes && routes.length > 0) {
+          var route = routes[0];
+          routeCoordinates = route.coordinates;
+
+          // Calculate distance
+          var totalDistance = route.summary.totalDistance;
+          var distKm = (totalDistance / 1000).toFixed(2);
+          document.getElementById("distanceBox").innerText = "📏 Distance: " + distKm + " km";
+
+          // Find the closest point on the route to the user's current location
+          var userPoint = L.latLng(userLat, userLng);
+          var minDistance = Infinity;
+          var closestIndex = 0;
+
+          for (var i = 0; i < routeCoordinates.length; i++) {
+            var dist = map.distance(userPoint, routeCoordinates[i]);
+            if (dist < minDistance) {
+              minDistance = dist;
+              closestIndex = i;
+            }
+          }
+
+          // Split the route into traveled and remaining paths
+          var traveledCoords = routeCoordinates.slice(0, closestIndex + 1);
+          // Add user's actual position to make the path continuous
+          traveledCoords.push(userPoint);
+          
+          var remainingCoords = [userPoint].concat(routeCoordinates.slice(closestIndex + 1));
+
+          // Update or create traveled path
+          if (traveledPath) {
+            traveledPath.setLatLngs(traveledCoords);
+          } else {
+            traveledPath = L.polyline(traveledCoords, {
+              color: '#2ecc71',
+              weight: 6,
+              smoothFactor: 1,
+              lineCap: 'round',
+              lineJoin: 'round'
+            }).addTo(map);
+          }
+
+          // Update or create remaining path
+          if (remainingPath) {
+            remainingPath.setLatLngs(remainingCoords);
+          } else {
+            remainingPath = L.polyline(remainingCoords, {
+              color: '#e74c3c',
+              weight: 6,
+              smoothFactor: 1,
+              lineCap: 'round',
+              lineJoin: 'round'
+            }).addTo(map);
+          }
+        }
+        
+        document.getElementById('distanceBox').classList.remove('updating');
+      });
+    }
+
+    // Watch User Live Location
+    function startTracking() {
+      if (watchId !== null) return;
+      
+      watchId = navigator.geolocation.watchPosition(
+        success, 
+        error, 
+        { 
+          enableHighAccuracy: true, 
+          timeout: 10000,
+          maximumAge: 3000
+        }
+      );
+      
+      document.getElementById('locationStatus').textContent = 'Tracking active';
+      isTracking = true;
+    }
+
+    function stopTracking() {
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+      }
+      
+      document.getElementById('locationStatus').textContent = 'Tracking paused';
+      isTracking = false;
+    }
+
+    function toggleTracking() {
+      if (isTracking) {
+        stopTracking();
+      } else {
+        startTracking();
+      }
+    }
+
+    function success(pos) {
+      var userLat = pos.coords.latitude;
+      var userLng = pos.coords.longitude;
+      
+      // Calculate bearing if we have a previous position
+      if (previousPosition) {
+        currentBearing = calculateBearing(
+          previousPosition.lat, 
+          previousPosition.lng, 
+          userLat, 
+          userLng
+        );
+      }
+      
+      // Store current position for next calculation
+      previousPosition = { lat: userLat, lng: userLng };
+
+      // Update or create user marker with directional arrow
+      if (userMarker) {
+        userMarker.setLatLng([userLat, userLng]);
+        // Update the icon rotation
+        userMarker.setIcon(createUserMarker(userLat, userLng, currentBearing).options.icon);
+      } else {
+        userMarker = createUserMarker(userLat, userLng, currentBearing)
+          .addTo(map)
+          .bindPopup("📍 You are here");
+      }
+
+      // Check proximity to points
+      checkProximity(userLat, userLng);
+
+      // Update route
+      updateRoute(userLat, userLng);
+    }
+
+    function error(err) {
+      console.error("Location error:", err);
+      document.getElementById('locationStatus').textContent = 'Location error: ' + err.message;
+    }
+
+    // Center map on user location
+    function centerMap() {
+      if (userMarker) {
+        map.setView(userMarker.getLatLng(), 15);
+        map.setBearing(0); // Reset rotation
+      }
+    }
+
+    // Handle map events to prevent issues with paths
+    map.on('zoomstart', function() {
+      if (traveledPath) traveledPath.setStyle({smoothFactor: 100});
+      if (remainingPath) remainingPath.setStyle({smoothFactor: 100});
+    });
+
+    map.on('zoomend', function() {
+      if (traveledPath) traveledPath.setStyle({smoothFactor: 1});
+      if (remainingPath) remainingPath.setStyle({smoothFactor: 1});
+      
+      if (userMarker) {
+        var latLng = userMarker.getLatLng();
+        updateRoute(latLng.lat, latLng.lng);
+      }
+    });
+
+    // Ensure markers and polylines stay visible and update on rotation
+    map.on('rotate', function() {
+      if (userMarker) userMarker.addTo(map);
+      if (destMarker) destMarker.addTo(map);
+      if (traveledPath) traveledPath.addTo(map);
+      if (remainingPath) remainingPath.addTo(map);
+      if (userMarker) {
+        var latLng = userMarker.getLatLng();
+        updateRoute(latLng.lat, latLng.lng); // Recompute route on rotate
+      }
+    });
+
+    // Create proximity points
+    createProximityPoints();
+
+    // Start tracking initially
+    startTracking();
+
+    // Add keyboard shortcut for centering
+    document.addEventListener('keydown', function(event) {
+      if (event.key === 'c' || event.key === 'C') {
+        centerMap();
+      }
+      if (event.key === 't' || event.key === 'T') {
+        toggleTracking();
+      }
+    });
+  </script>
+</body>
+</html>
